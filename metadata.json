@@ -1,0 +1,10 @@
+{
+  "name": "Teleco - TP Skillence Academy",
+  "description": "A comprehensive training program for call center agents to enhance language profiles and cultural understanding, featuring interactive modules and AI-generated worksheets.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
