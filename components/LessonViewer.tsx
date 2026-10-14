@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import type { Resource, QuizQuestion, UserProfile } from '../types';
 import { geminiService } from '../services/geminiService';
 import { googleSheetService } from '../services/googleSheetService';
+import { recordUserScore } from '../services/progressService';
 import { ExitIcon, CheckCircleIcon, ExclamationCircleIcon, BrainIcon, LinkIcon } from './Icons';
 import LiveCoach from './LiveCoach';
 import InteractiveLessonViewer from './InteractiveLessonViewer';
@@ -35,6 +36,8 @@ const LessonViewer: React.FC<LessonViewerProps> = ({ resource, uid, currentUser,
 
   const handleInteractiveSubmit = async (submissionId?: string) => {
     try {
+      // Record real-time score & mastery in progressService immediately
+      recordUserScore(uid, resource.id, 100, true, resource.duration || 15, resource.title);
       // Record 100% mastery / completion progress in backend
       const response = await googleSheetService.submitProgress(uid, resource.id, true, 100, 0);
       setBackendStatus('completed');
@@ -95,6 +98,8 @@ const LessonViewer: React.FC<LessonViewerProps> = ({ resource, uid, currentUser,
     const timeTakenSecs = quizStartTime ? Math.round((Date.now() - quizStartTime) / 1000) : 0;
     
     setScore(finalScore);
+    // Record real-time score & attempt into progressService immediately
+    recordUserScore(uid, resource.id, finalScore, passed, resource.duration || 15, resource.title);
     setIsGenerating(true);
     try {
       const response = await googleSheetService.submitQuizResult(uid, resource.id, passed, finalScore, timeTakenSecs);
@@ -103,6 +108,7 @@ const LessonViewer: React.FC<LessonViewerProps> = ({ resource, uid, currentUser,
       setView('result');
     } catch (err) {
       console.error("Registry sync failed", err);
+      if (passed) onMasteryAchieved();
       setView('result');
     } finally {
       setIsGenerating(false);
@@ -121,10 +127,13 @@ const LessonViewer: React.FC<LessonViewerProps> = ({ resource, uid, currentUser,
     const handleSimulationComplete = async (score: number, timeTaken: number) => {
       try {
         const passed = score >= 60;
+        // Record real-time simulation score in progressService immediately
+        recordUserScore(uid, resource.id, score, passed, timeTaken || 15, resource.title);
         await googleSheetService.submitProgress(uid, resource.id, passed, score, timeTaken);
         onMasteryAchieved();
       } catch (err) {
         console.error("Failed to submit simulation progress:", err);
+        onMasteryAchieved();
       }
     };
 

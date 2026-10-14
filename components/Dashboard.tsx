@@ -2,7 +2,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import type { UserProfile, Resource, View, SkillCategory } from '../types';
 import { ResourceType } from '../types';
-import { getMyLessons } from '../services/progressService';
+import { getMyLessons, getUserProgress, subscribeToProgress, PROGRESS_UPDATED_EVENT } from '../services/progressService';
 import { Sparkles, Loader2, ShieldCheck, FileText } from 'lucide-react';
 import { 
   TrendingUpIcon, 
@@ -54,14 +54,65 @@ const Dashboard: React.FC<DashboardProps> = ({ user, resources, onNavigate, onOp
     loadShieldedLessons();
   }, [user]);
 
+  const [progressTick, setProgressTick] = useState<number>(0);
+
+  // Subscribe to real-time progress updates so the dashboard updates immediately
+  useEffect(() => {
+    const unsub = subscribeToProgress((userId) => {
+      if (!userId || userId === user.id) {
+        setProgressTick(t => t + 1);
+      }
+    });
+    const handleEvt = (e: any) => {
+      if (!e.detail?.userId || e.detail?.userId === user.id) {
+        setProgressTick(t => t + 1);
+      }
+    };
+    window.addEventListener(PROGRESS_UPDATED_EVENT, handleEvt);
+    return () => {
+      unsub();
+      window.removeEventListener(PROGRESS_UPDATED_EVENT, handleEvt);
+    };
+  }, [user.id]);
+
+  // Synchronize incoming resources with local progressService single source of truth
+  const synchronizedResources = useMemo(() => {
+    const userProg = getUserProgress(user.id);
+    if (!userProg) return resources;
+
+    return resources.map(res => {
+      const resId = String(res.id);
+      const localDetail = userProg.resourceProgress?.[resId];
+      const localScore = userProg.quizScores?.[resId];
+      const isCompleted = (userProg.completedLessons || []).includes(resId) || 
+                          (userProg.completedLessons || []).includes(res.title) ||
+                          localDetail?.status === 'completed';
+
+      if (!localDetail && localScore === undefined && !isCompleted) {
+        return res;
+      }
+
+      return {
+        ...res,
+        progress: {
+          ...res.progress,
+          status: isCompleted ? ('completed' as const) : (res.progress?.status || 'assigned'),
+          score: localScore !== undefined ? localScore : (localDetail?.score ?? res.progress?.score ?? 0),
+          completedAt: localDetail?.completedAt || res.progress?.completedAt || (isCompleted ? new Date().toISOString() : null),
+          attempts: Math.max(localDetail?.attempts || 0, res.progress?.attempts || 0, isCompleted ? 1 : 0)
+        }
+      };
+    });
+  }, [resources, user.id, progressTick]);
+
   const GAP_THRESHOLD_NORMALIZED = 80;
 
   // Mastery Calculation: (Number of Completed Courses / Total Assigned Courses) * 100
   const progressPercent = useMemo(() => {
-    if (resources.length === 0) return 0;
-    const completedCount = resources.filter(r => r.progress?.status === 'completed').length;
-    return Math.round((completedCount / resources.length) * 100);
-  }, [resources]);
+    if (synchronizedResources.length === 0) return 0;
+    const completedCount = synchronizedResources.filter(r => r.progress?.status === 'completed').length;
+    return Math.round((completedCount / synchronizedResources.length) * 100);
+  }, [synchronizedResources]);
 
   const competencyMetrics = useMemo(() => {
     const m = user?.metrics || {};
@@ -105,7 +156,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, resources, onNavigate, onOp
 
   // Tab Logic & Filtering (Case-insensitive matching)
   const { activeCourses, completedCourses } = useMemo(() => {
-    const filtered = resources.filter(res => {
+    const filtered = synchronizedResources.filter(res => {
       if (activeSkill === 'All') return true;
       return res.tags.some(t => t.toLowerCase() === activeSkill.toLowerCase());
     });
@@ -114,7 +165,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, resources, onNavigate, onOp
       activeCourses: filtered.filter(r => r.progress?.status !== 'completed'),
       completedCourses: filtered.filter(r => r.progress?.status === 'completed')
     };
-  }, [resources, activeSkill]);
+  }, [synchronizedResources, activeSkill]);
 
   // Calculate Progress Stats
   const WEEKLY_TARGET = 180;
@@ -125,7 +176,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, resources, onNavigate, onOp
     const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
     startOfWeek.setHours(0,0,0,0);
 
-    const nonGeneralResources = resources.filter(r => !(r.tags || []).includes('general'));
+    const nonGeneralResources = synchronizedResources.filter(r => !(r.tags || []).includes('general'));
     const totalAssigned = nonGeneralResources.length;
     const completedCount = nonGeneralResources.filter(r => r.progress?.status === 'completed').length;
 
@@ -146,7 +197,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, resources, onNavigate, onOp
     const daysRemaining = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
 
     // Calculate weekly average score
-    const weeklyCompleted = resources.filter(r => 
+    const weeklyCompleted = synchronizedResources.filter(r => 
       r.progress?.status === 'completed' && 
       r.progress.completedAt && 
       new Date(r.progress.completedAt) >= startOfWeek
@@ -171,7 +222,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, resources, onNavigate, onOp
       totalAssigned,
       weeklyAverageScore
     };
-  }, [resources]);
+  }, [synchronizedResources]);
 
   return (
     <div className="space-y-12 animate-fadeIn pb-20 p-6 md:p-8">

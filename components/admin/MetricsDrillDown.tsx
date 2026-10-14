@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { UserProfile } from '../../types';
 import { googleSheetService } from '../../services/googleSheetService';
+import { calculateUserRealTimeScores, subscribeToProgress, PROGRESS_UPDATED_EVENT } from '../../services/progressService';
 
 interface MetricsDrillDownProps {
   isOpen: boolean;
@@ -81,6 +82,18 @@ export const MetricsDrillDown: React.FC<MetricsDrillDownProps> = ({
   const [selectedTranscriptIndex, setSelectedTranscriptIndex] = useState<number>(0);
   const [liveTranscripts, setLiveTranscripts] = useState<any[]>([]);
   const [isLoadingTranscripts, setIsLoadingTranscripts] = useState<boolean>(false);
+  const [updateTick, setUpdateTick] = useState<number>(0);
+
+  // Subscribe to real-time progress updates so metrics update instantaneously
+  useEffect(() => {
+    const unsub = subscribeToProgress(() => setUpdateTick(t => t + 1));
+    const handleEvt = () => setUpdateTick(t => t + 1);
+    window.addEventListener(PROGRESS_UPDATED_EVENT, handleEvt);
+    return () => {
+      unsub();
+      window.removeEventListener(PROGRESS_UPDATED_EVENT, handleEvt);
+    };
+  }, []);
 
   // States for Assigning AI Simulations
   const [allResources, setAllResources] = useState<any[]>([]);
@@ -151,11 +164,25 @@ export const MetricsDrillDown: React.FC<MetricsDrillDownProps> = ({
     }
   };
 
-  // Retrieve stats associated with individual user profile
+  // Retrieve and compute stats associated with individual user profile dynamically from single source of truth
   const userStats = useMemo(() => {
-    if (!user || !adminStats?.userStats) return null;
-    return adminStats.userStats.find((s: any) => s.userId === user.id) || null;
-  }, [adminStats, user]);
+    if (!user) return null;
+    const backendUserStats = adminStats?.userStats?.find((s: any) => String(s.userId) === String(user.id)) || null;
+    const computed = calculateUserRealTimeScores(user.id, backendUserStats);
+
+    return {
+      userId: user.id,
+      weeklyMinutes: computed.weeklyMinutes,
+      weeklyProgress: computed.weeklyProgress,
+      overallProgress: computed.overallProgress,
+      totalCompleted: computed.totalCompleted,
+      totalAssigned: computed.totalAssigned,
+      averageScore: computed.averageScore,
+      weeklyAverageScore: computed.weeklyAverageScore,
+      hasScores: computed.hasScores,
+      weeklyHistory: backendUserStats?.weeklyHistory || []
+    };
+  }, [adminStats, user, updateTick]);
 
   // Clean, unpack, and align SVAR and WriteX variables securely (Vector 3)
   const cleanedMetrics = useMemo(() => {
@@ -330,7 +357,7 @@ export const MetricsDrillDown: React.FC<MetricsDrillDownProps> = ({
             <div className="space-y-8 animate-fadeIn">
               
               {/* Stat Highlight Tiles */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-gray-50 rounded-2xl p-5 border border-gray-100 flex items-center justify-between">
                   <div>
                     <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">Roster Learning Speed</p>
@@ -357,12 +384,25 @@ export const MetricsDrillDown: React.FC<MetricsDrillDownProps> = ({
 
                 <div className="bg-gray-50 rounded-2xl p-5 border border-gray-100 flex items-center justify-between">
                   <div>
-                    <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">General Progress</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">Curriculum Progress</p>
                     <p className="text-xl font-black text-tp-purple mt-1">{userStats?.overallProgress || 0}%</p>
-                    <p className="text-[9px] font-bold text-gray-400 uppercase mt-0.5">Estimated accuracy</p>
+                    <p className="text-[9px] font-bold text-gray-400 uppercase mt-0.5">Assigned Courses</p>
+                  </div>
+                  <div className="w-10 h-10 bg-blue-50 text-blue-500 rounded-xl flex items-center justify-center">
+                    <TrendingUp className="w-5 h-5" />
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 rounded-2xl p-5 border border-gray-100 flex items-center justify-between">
+                  <div>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">Real-Time Avg Score</p>
+                    <p className="text-xl font-black text-tp-purple mt-1">
+                      {userStats?.averageScore && userStats.averageScore > 0 ? `${userStats.averageScore}%` : 'N/A'}
+                    </p>
+                    <p className="text-[9px] font-bold text-tp-red uppercase mt-0.5">Assessment Mastery</p>
                   </div>
                   <div className="w-10 h-10 bg-tp-red/5 text-tp-red rounded-xl flex items-center justify-center">
-                    <TrendingUp className="w-5 h-5" />
+                    <Brain className="w-5 h-5" />
                   </div>
                 </div>
               </div>

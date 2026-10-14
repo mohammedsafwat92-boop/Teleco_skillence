@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { shlService } from '../services/shlService';
 import { geminiService } from '../services/geminiService';
 import { googleSheetService } from '../services/googleSheetService';
+import { getAdminCombinedUsers, calculateAdminKPIs } from '../services/adminService';
+import { subscribeToProgress, PROGRESS_UPDATED_EVENT } from '../services/progressService';
 import ResourceUploader from './admin/ResourceUploader';
 import UserUploader from './admin/UserUploader';
 import QuickAddAgent from './admin/QuickAddAgent';
@@ -65,6 +67,22 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onUpdateContent, currentUser, o
   const [isSavingGoal, setIsSavingGoal] = useState(false);
   const [defaultGoalInput, setDefaultGoalInput] = useState<string>('');
   const [weeklyOverrideInput, setWeeklyOverrideInput] = useState<string>('');
+  const [progressUpdateTick, setProgressUpdateTick] = useState<number>(0);
+
+  // Subscribe to real-time score and progress updates across the entire app
+  useEffect(() => {
+    const unsub = subscribeToProgress((userId) => {
+      setProgressUpdateTick(t => t + 1);
+    });
+    const handleProgressEvt = () => {
+      setProgressUpdateTick(t => t + 1);
+    };
+    window.addEventListener(PROGRESS_UPDATED_EVENT, handleProgressEvt);
+    return () => {
+      unsub();
+      window.removeEventListener(PROGRESS_UPDATED_EVENT, handleProgressEvt);
+    };
+  }, []);
 
   useEffect(() => {
     if (activeWave !== 'all') {
@@ -88,41 +106,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onUpdateContent, currentUser, o
     return Array.from(weeks).sort();
   }, [adminStats]);
 
+  // Dynamically derive real-time user scores and progress using the unified single source of truth
   const combinedStats = useMemo(() => {
-    if (!userList || !adminStats?.userStats) return [];
-    
-    let activeUsers = userList.filter(u => u.role === 'agent');
-    if (activeWave !== 'all') {
-      activeUsers = activeUsers.filter(u => u.wave === activeWave || u.waveNumber === activeWave);
-    }
-    
-    return activeUsers
-      .map(user => {
-        const stats = adminStats.userStats.find((s: any) => s.userId === user.id) || {
-          weeklyMinutes: 0,
-          overallProgress: 0,
-          totalCompleted: 0,
-          totalAssigned: 0,
-          weeklyHistory: []
-        };
-
-        if (selectedWeek !== 'overall' && stats.weeklyHistory) {
-          const weekData = stats.weeklyHistory.find((w: any) => w.weekLabel === selectedWeek);
-          return {
-            ...user,
-            ...stats,
-            weeklyMinutes: weekData ? weekData.minutes : 0,
-            overallProgress: weekData ? weekData.progress : 0,
-            totalCompleted: weekData ? weekData.completedCount : 0
-          };
-        }
-
-        return {
-          ...user,
-          ...stats
-        };
-      });
-  }, [userList, adminStats, selectedWeek, activeWave]);
+    if (!userList || userList.length === 0) return [];
+    return getAdminCombinedUsers(userList, adminStats, selectedWeek, activeWave);
+  }, [userList, adminStats, selectedWeek, activeWave, progressUpdateTick]);
 
   const filteredStats = useMemo(() => {
     return combinedStats.filter(user => {
@@ -134,14 +122,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onUpdateContent, currentUser, o
   }, [combinedStats, searchTerm, showStagnant]);
 
   const metrics = useMemo(() => {
-    const totalAgents = combinedStats.length;
-    const totalProgress = combinedStats.reduce((acc, u) => acc + (u.overallProgress || 0), 0);
-    const avgProgress = totalAgents > 0 ? Math.round(totalProgress / totalAgents) : 0;
-    
-    const totalWeeklyProgress = combinedStats.reduce((acc, u) => acc + (u.weeklyProgress || 0), 0);
-    const avgWeeklyProgress = totalAgents > 0 ? Math.round(totalWeeklyProgress / totalAgents) : 0;
-    const atRisk = combinedStats.filter(u => u.overallProgress < 30).length;
-    return { totalAgents, avgProgress, avgWeeklyProgress, atRisk };
+    return calculateAdminKPIs(combinedStats);
   }, [combinedStats]);
 
   const fetchUsers = async () => {
@@ -308,6 +289,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onUpdateContent, currentUser, o
       'Email',
       'Role',
       'CEFR Level',
+      'Average Score (%)',
+      'Overall Progress (%)',
+      'Weekly Minutes',
       'Fluency',
       'Vocabulary',
       'Grammar',
@@ -323,6 +307,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onUpdateContent, currentUser, o
         `"${u.email}"`,
         u.role, 
         u.languageLevel || 'N/A', 
+        u.averageScore || 0,
+        u.overallProgress || 0,
+        u.weeklyMinutes || 0,
         m.fluency || 0, 
         m.vocabulary || 0, 
         m.grammar || 0, 
@@ -519,7 +506,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onUpdateContent, currentUser, o
       {activeTab === 'users' && (
         <div className="space-y-8 animate-fadeIn">
           {/* Stat Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
             <div id="stat-total-agents" className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
               <div className="flex items-center justify-between mb-4">
                 <div className="p-2 bg-indigo-50 rounded-lg text-indigo-600">
@@ -543,6 +530,19 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onUpdateContent, currentUser, o
               <div className="flex items-baseline gap-2">
                 <h3 className="text-3xl font-black text-gray-900">{metrics.avgProgress}%</h3>
                 <span className="text-xs font-medium text-emerald-600">Overall</span>
+              </div>
+            </div>
+
+            <div id="stat-avg-score" className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
+              <div className="flex items-center justify-between mb-4">
+                <div className="p-2 bg-tp-red/10 rounded-lg text-tp-red">
+                  <Brain className="w-6 h-6" />
+                </div>
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Avg Score</span>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <h3 className="text-3xl font-black text-gray-900">{metrics.avgScore > 0 ? `${metrics.avgScore}%` : 'N/A'}</h3>
+                <span className="text-xs font-medium text-tp-red">Proficiency</span>
               </div>
             </div>
 
@@ -641,6 +641,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onUpdateContent, currentUser, o
                       {selectedWeek === 'overall' ? 'Overall Progress' : `${selectedWeek} Progress (%)`}
                     </th>
                     <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center">
+                      Avg Score
+                    </th>
+                    <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center">
                       {selectedWeek === 'overall' ? 'Completed' : `${selectedWeek} Completed`}
                     </th>
                     <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Actions</th>
@@ -670,7 +673,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onUpdateContent, currentUser, o
                           {user.weeklyMinutes}m
                         </span>
                       </td>
-                      <td className="px-8 py-6 min-w-[200px]">
+                      <td className="px-8 py-6 min-w-[180px]">
                         <div className="flex items-center gap-3">
                           <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
                             <div 
@@ -684,6 +687,23 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onUpdateContent, currentUser, o
                             {user.overallProgress}%
                           </span>
                         </div>
+                      </td>
+                      <td className="px-8 py-6 text-center">
+                        {(user.averageScore || 0) > 0 ? (
+                          <span className={`inline-flex items-center px-3 py-1 rounded-xl text-xs font-black tracking-wide ${
+                            user.averageScore! >= 80 
+                              ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
+                              : user.averageScore! >= 60 
+                                ? 'bg-amber-50 text-amber-700 border border-amber-100' 
+                                : 'bg-rose-50 text-rose-600 border border-rose-100'
+                          }`}>
+                            {user.averageScore}%
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg text-[10px] font-bold text-gray-400 bg-gray-50 border border-gray-100">
+                            Pending
+                          </span>
+                        )}
                       </td>
                       <td className="px-8 py-6 text-center">
                         <p className="text-sm font-bold text-gray-900">{user.totalCompleted}</p>

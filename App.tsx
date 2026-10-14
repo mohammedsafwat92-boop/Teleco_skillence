@@ -8,6 +8,7 @@ import LessonViewer from './components/LessonViewer';
 import Login from './components/Login';
 import LiveCoach from './components/LiveCoach';
 import { googleSheetService } from './services/googleSheetService';
+import { syncPlanProgress } from './services/progressService';
 import { allTrainingModules } from './data/trainingData';
 import type { View, UserProfile, Resource } from './types';
 import { 
@@ -133,11 +134,9 @@ const App: React.FC = () => {
     try {
       const data = await googleSheetService.fetchUserPlan(id, r);
       // Handle both old array format and new object format for backward compatibility
-      if (data && data.resources) {
-        setUserPlan(data.resources);
-      } else {
-        setUserPlan(Array.isArray(data) ? data : []);
-      }
+      const resourcesList = data && data.resources ? data.resources : (Array.isArray(data) ? data : []);
+      setUserPlan(resourcesList);
+      syncPlanProgress(id, resourcesList);
     } catch (err) {
       console.error("Refresh Error:", err);
     }

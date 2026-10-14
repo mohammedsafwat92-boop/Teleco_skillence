@@ -71,6 +71,8 @@ export interface UserProfile {
   generatedCredentials?: UserCredentials;
   overallProgress?: number;
   weeklyProgress?: number;
+  averageScore?: number;
+  weeklyAverageScore?: number;
   wave?: string;
   assignedScenarioId?: string;
   waveNumber?: string;
@@ -146,6 +148,8 @@ export interface UserStats {
   overallProgress: number;
   totalCompleted: number;
   totalAssigned: number;
+  averageScore?: number;
+  weeklyAverageScore?: number;
   weeklyHistory?: { weekLabel: string, minutes: number, progress: number, completedCount: number }[];
 }
 
